@@ -354,6 +354,10 @@ def main():
         st.session_state.V = None
     if 'history' not in st.session_state:
         st.session_state.history = []
+    if 'env_name' not in st.session_state:
+        st.session_state.env_name = "Taxi-v3"
+    if 'is_slippery' not in st.session_state:
+        st.session_state.is_slippery = False
     
     # Algorithm descriptions
     algorithm_info = {
@@ -414,6 +418,13 @@ def main():
     
     # Training
     if train_button:
+        # Clear previous inference results when starting new training
+        st.session_state.inference_frames = []
+        st.session_state.inference_trajectory = []
+        st.session_state.inference_rewards = []
+        st.session_state.inference_done = False
+        st.session_state.inference_terminated = False
+        
         env = create_environment(env_name, is_slippery)
         
         with st.spinner(f"Training {algorithm}..."):
@@ -430,6 +441,7 @@ def main():
                     st.session_state.trained = True
                     st.session_state.algorithm = algorithm
                     st.session_state.env_name = env_name
+                    st.session_state.is_slippery = is_slippery
                 
                 elif algorithm == "Policy Iteration":
                     agent = policy_iteration(env, gamma, n_iter)
@@ -439,6 +451,7 @@ def main():
                     st.session_state.trained = True
                     st.session_state.algorithm = algorithm
                     st.session_state.env_name = env_name
+                    st.session_state.is_slippery = is_slippery
                 
                 elif algorithm == "Monte Carlo":
                     env_train = create_train_env(env_name, is_slippery)
@@ -450,6 +463,7 @@ def main():
                     st.session_state.trained = True
                     st.session_state.algorithm = algorithm
                     st.session_state.env_name = env_name
+                    st.session_state.is_slippery = is_slippery
                 
                 elif algorithm == "Temporal Difference (TD)":
                     env_train = create_train_env(env_name, is_slippery)
@@ -461,6 +475,7 @@ def main():
                     st.session_state.trained = True
                     st.session_state.algorithm = algorithm
                     st.session_state.env_name = env_name
+                    st.session_state.is_slippery = is_slippery
                 
                 elif algorithm == "SARSA":
                     env_train = create_train_env(env_name, is_slippery)
@@ -472,6 +487,7 @@ def main():
                     st.session_state.trained = True
                     st.session_state.algorithm = algorithm
                     st.session_state.env_name = env_name
+                    st.session_state.is_slippery = is_slippery
                 
                 elif algorithm == "Q-Learning":
                     env_train = create_train_env(env_name, is_slippery)
@@ -483,6 +499,7 @@ def main():
                     st.session_state.trained = True
                     st.session_state.algorithm = algorithm
                     st.session_state.env_name = env_name
+                    st.session_state.is_slippery = is_slippery
                 
                 progress_bar.progress(1.0)
                 status_text.text("Training complete!")
@@ -563,7 +580,10 @@ def main():
             
             if run_inference_btn:
                 # Run inference and store results
-                env_infer = gym.make(st.session_state.env_name, render_mode="rgb_array", is_slippery=False) if st.session_state.env_name == "FrozenLake-v1" else gym.make(st.session_state.env_name, render_mode="rgb_array")
+                if st.session_state.env_name == "FrozenLake-v1":
+                    env_infer = gym.make(st.session_state.env_name, render_mode="rgb_array", is_slippery=st.session_state.is_slippery)
+                else:
+                    env_infer = gym.make(st.session_state.env_name, render_mode="rgb_array")
                 
                 state = env_infer.reset()[0]
                 frames = []
