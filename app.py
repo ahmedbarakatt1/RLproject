@@ -42,9 +42,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==================== ENVIRONMENT SETUP ====================
+
 @st.cache_resource
 def create_environment(env_name, is_slippery=False):
-    """Create and cache environment"""
+    """Create and cache environment for visualization (with render_mode)"""
     if env_name == "FrozenLake-v1":
         return gym.make("FrozenLake-v1", render_mode="rgb_array", is_slippery=is_slippery)
     elif env_name == "Taxi-v3":
@@ -53,17 +54,24 @@ def create_environment(env_name, is_slippery=False):
         return gym.make("CliffWalking-v1", render_mode="rgb_array")
     return None
 
+def create_train_env(env_name, is_slippery=False):
+    """Create environment for training (without caching, no render_mode for speed)"""
+    if env_name == "FrozenLake-v1":
+        return gym.make("FrozenLake-v1", is_slippery=is_slippery)
+    elif env_name == "Taxi-v3":
+        return gym.make("Taxi-v3")
+    elif env_name == "CliffWalking-v1":
+        return gym.make("CliffWalking-v1")
+    return None
+
 # ==================== IMPORT ALGORITHM CLASSES ====================
 # Import from your existing files
 from value_iteration import value_iteration
 from policy_iteration import policy_iteration
 from monte_carlo import monte_carlo
-
-# Note: Implement these algorithms in separate files and import them here
-# from temporal_difference import temporal_difference
-# from n_step_td import n_step_td
-# from sarsa import sarsa
-# from q_learning import q_learning
+from sarsa import SARSA
+from td import TemporalDifference
+from q_learning import QLearning
 
 # ==================== VISUALIZATION FUNCTIONS ====================
 def plot_value_function(V, env_name, grid_size=None):
@@ -141,7 +149,14 @@ def plot_convergence(history, algorithm_type):
     """Plot convergence metrics"""
     fig, ax = plt.subplots(figsize=(5, 2.5))
     
-    if algorithm_type in ['Value Iteration']:
+    if not history:
+        ax.text(0.5, 0.5, "No convergence data available", 
+                ha='center', va='center', fontsize=10, transform=ax.transAxes)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        return fig
+    
+    if algorithm_type == 'Value Iteration' and 'max_diff' in history[0]:
         iterations = [h['iteration'] for h in history]
         max_diffs = [h['max_diff'] for h in history]
         ax.plot(iterations, max_diffs, 'b-', linewidth=2, marker='o', markersize=3)
@@ -149,7 +164,20 @@ def plot_convergence(history, algorithm_type):
         ax.set_ylabel('Max Value Change', fontsize=10)
         ax.set_title('Convergence: Max Value Difference per Iteration', fontsize=11, fontweight='bold')
         ax.set_yscale('log')
-    elif algorithm_type in ['Monte Carlo', 'SARSA', 'Q-Learning', 'TD', 'n-step TD']:
+    elif 'reward' in history[0]:
+        # Plot episode rewards
+        episodes = [h['episode'] for h in history]
+        rewards = [h['reward'] for h in history]
+        # Smooth rewards with moving average
+        window = min(100, len(rewards) // 10 + 1)
+        if window > 1:
+            smoothed = np.convolve(rewards, np.ones(window)/window, mode='valid')
+            ax.plot(episodes[:len(smoothed)], smoothed, 'b-', linewidth=2, label='Avg Reward')
+        ax.plot(episodes, rewards, 'b-', alpha=0.3, linewidth=1)
+        ax.set_xlabel('Episode', fontsize=10)
+        ax.set_ylabel('Total Reward', fontsize=10)
+        ax.set_title('Training Progress: Episode Rewards', fontsize=11, fontweight='bold')
+    elif algorithm_type in ['Monte Carlo', 'SARSA', 'Q-Learning', 'TD']:
         if history:
             episodes = [h['episode'] for h in history]
             epsilons = [h['epsilon'] for h in history]
@@ -212,7 +240,7 @@ def main():
         env_name = st.selectbox(
             "Select Environment",
             ["FrozenLake-v1", "Taxi-v3", "CliffWalking-v1"],
-            help="Choose the environment for training. FrozenLake is a simple grid world, Taxi involves pickup/dropoff, CliffWalking has a dangerous cliff."
+            help="Choose the environment for training."
         )
         
         if env_name == "FrozenLake-v1":
@@ -229,7 +257,7 @@ def main():
         # Algorithm Selection
         st.subheader("🧠 Algorithm")
         
-        available_algorithms = ["Value Iteration", "Policy Iteration", "Monte Carlo", "Temporal Difference (TD)", "n-step TD", "SARSA", "Q-Learning"]
+        available_algorithms = ["Value Iteration", "Policy Iteration", "Monte Carlo", "Temporal Difference (TD)", "SARSA", "Q-Learning"]
         
         algorithm = st.selectbox(
             "Select Algorithm",
@@ -270,7 +298,7 @@ def main():
                 help="Number of episodes to train the agent."
             )
         
-        if algorithm in ["Monte Carlo", "Temporal Difference (TD)", "n-step TD", "SARSA", "Q-Learning"]:
+        if algorithm in ["Monte Carlo", "Temporal Difference (TD)", "SARSA", "Q-Learning"]:
             epsilon = st.slider(
                 "Initial Exploration Rate (ε)",
                 min_value=0.0,
@@ -299,7 +327,7 @@ def main():
                 help="Minimum exploration rate to maintain some exploration."
             )
         
-        if algorithm in ["Temporal Difference (TD)", "n-step TD", "SARSA", "Q-Learning"]:
+        if algorithm in ["Temporal Difference (TD)", "SARSA", "Q-Learning"]:
             alpha = st.slider(
                 "Learning Rate (α)",
                 min_value=0.01,
@@ -307,16 +335,6 @@ def main():
                 value=0.1,
                 step=0.01,
                 help="Step size for updating value estimates. Higher values mean faster but potentially unstable learning."
-            )
-        
-        if algorithm == "n-step TD":
-            n_steps = st.slider(
-                "Number of Steps (n)",
-                min_value=1,
-                max_value=20,
-                value=5,
-                step=1,
-                help="Number of steps to look ahead before updating values. n=1 is equivalent to TD(0)."
             )
         
         st.divider()
@@ -363,12 +381,6 @@ def main():
             "pros": ["Model-free", "Can learn before episode ends", "Lower variance than MC"],
             "cons": ["Biased estimates", "Sensitive to learning rate"]
         },
-        "n-step TD": {
-            "description": "n-step TD bridges the gap between TD(0) and Monte Carlo by using n steps of actual rewards before bootstrapping.",
-            "formula": "G_t:t+n = R_t+1 + γR_t+2 + ... + γ^(n-1)R_t+n + γ^n V(S_t+n)",
-            "pros": ["Flexible trade-off between bias and variance", "Often faster learning than TD(0)"],
-            "cons": ["More complex to implement", "Requires tuning n"]
-        },
         "SARSA": {
             "description": "SARSA (State-Action-Reward-State-Action) is an on-policy TD control algorithm that learns Q-values while following an ε-greedy policy.",
             "formula": "Q(s,a) ← Q(s,a) + α[R + γQ(s',a') - Q(s,a)]",
@@ -408,53 +420,77 @@ def main():
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            if algorithm == "Value Iteration":
-                agent = value_iteration(env, gamma, n_iter)
-                agent.iterate_value()
-                policy = agent.get_optimal_policy()
-                st.session_state.V = np.array(agent.V)
-                st.session_state.policy = np.array(policy)
-                st.session_state.trained = True
-                st.session_state.algorithm = algorithm
-                st.session_state.env_name = env_name
-            
-            elif algorithm == "Policy Iteration":
-                agent = policy_iteration(env, gamma, n_iter)
-                policy = agent.get_optimal_policy()
-                st.session_state.V = np.array(agent.V)
-                st.session_state.policy = np.array(policy)
-                st.session_state.trained = True
-                st.session_state.algorithm = algorithm
-                st.session_state.env_name = env_name
-            
-            elif algorithm == "Monte Carlo":
-                env_train = gym.make(env_name, is_slippery=is_slippery) if env_name == "FrozenLake-v1" else gym.make(env_name)
-                agent = monte_carlo(env_train, n_episodes, epsilon, epsilon_decay, min_epsilon, gamma)
-                policy = agent.get_policy_epsilon()
-                st.session_state.V = np.max(agent.Q, axis=1)
-                st.session_state.policy = np.array(policy)
-                st.session_state.trained = True
-                st.session_state.algorithm = algorithm
-                st.session_state.env_name = env_name
-            
-            elif algorithm == "Temporal Difference (TD)":
-                st.warning("TD algorithm not yet implemented. Create temporal_difference.py and import it.")
-                st.session_state.trained = False
-            
-            elif algorithm == "n-step TD":
-                st.warning("n-step TD algorithm not yet implemented. Create n_step_td.py and import it.")
-                st.session_state.trained = False
-            
-            elif algorithm == "SARSA":
-                st.warning("SARSA algorithm not yet implemented. Create sarsa.py and import it.")
-                st.session_state.trained = False
-            
-            elif algorithm == "Q-Learning":
-                st.warning("Q-Learning algorithm not yet implemented. Create q_learning.py and import it.")
-                st.session_state.trained = False
-            
-            progress_bar.progress(1.0)
-            status_text.text("Training complete!")
+            try:
+                if algorithm == "Value Iteration":
+                    agent = value_iteration(env, gamma, n_iter)
+                    agent.iterate_value()
+                    policy = agent.get_optimal_policy()
+                    st.session_state.V = np.array(agent.V)
+                    st.session_state.policy = np.array(policy)
+                    st.session_state.trained = True
+                    st.session_state.algorithm = algorithm
+                    st.session_state.env_name = env_name
+                
+                elif algorithm == "Policy Iteration":
+                    agent = policy_iteration(env, gamma, n_iter)
+                    policy = agent.get_optimal_policy()
+                    st.session_state.V = np.array(agent.V)
+                    st.session_state.policy = np.array(policy)
+                    st.session_state.trained = True
+                    st.session_state.algorithm = algorithm
+                    st.session_state.env_name = env_name
+                
+                elif algorithm == "Monte Carlo":
+                    env_train = create_train_env(env_name, is_slippery)
+                    agent = monte_carlo(env_train, n_episodes, epsilon, epsilon_decay, min_epsilon, gamma)
+                    policy = agent.get_policy_epsilon()
+                    st.session_state.V = np.max(agent.Q, axis=1)
+                    st.session_state.policy = np.array(policy)
+                    st.session_state.history = agent.history
+                    st.session_state.trained = True
+                    st.session_state.algorithm = algorithm
+                    st.session_state.env_name = env_name
+                
+                elif algorithm == "Temporal Difference (TD)":
+                    env_train = create_train_env(env_name, is_slippery)
+                    agent = TemporalDifference(env_train, n_episodes, gamma, alpha)
+                    policy = agent.td_learning()
+                    st.session_state.V = np.max(agent.Q, axis=1)
+                    st.session_state.policy = np.array(policy)
+                    st.session_state.history = agent.history
+                    st.session_state.trained = True
+                    st.session_state.algorithm = algorithm
+                    st.session_state.env_name = env_name
+                
+                elif algorithm == "SARSA":
+                    env_train = create_train_env(env_name, is_slippery)
+                    agent = SARSA(n_episodes, gamma, alpha, epsilon, env_train)
+                    policy = agent.sarsa()
+                    st.session_state.V = np.max(agent.Q, axis=1)
+                    st.session_state.policy = np.array(policy)
+                    st.session_state.history = agent.history
+                    st.session_state.trained = True
+                    st.session_state.algorithm = algorithm
+                    st.session_state.env_name = env_name
+                
+                elif algorithm == "Q-Learning":
+                    env_train = create_train_env(env_name, is_slippery)
+                    agent = QLearning(env_train, n_episodes, gamma, alpha, epsilon)
+                    policy = agent.q_learning()
+                    st.session_state.V = np.max(agent.Q, axis=1)
+                    st.session_state.policy = np.array(policy)
+                    st.session_state.history = agent.history
+                    st.session_state.trained = True
+                    st.session_state.algorithm = algorithm
+                    st.session_state.env_name = env_name
+                
+                progress_bar.progress(1.0)
+                status_text.text("Training complete!")
+                
+            except Exception as e:
+                st.error(f"❌ Training failed: {str(e)}")
+                st.warning(f"The algorithm '{algorithm}' may not be compatible with '{env_name}' environment. "
+                          f"Try a different algorithm or environment combination.")
     
     # Display results
     if st.session_state.trained:
@@ -506,6 +542,8 @@ def main():
                 st.session_state.inference_rewards = []
             if 'inference_done' not in st.session_state:
                 st.session_state.inference_done = False
+            if 'inference_terminated' not in st.session_state:
+                st.session_state.inference_terminated = False
             
             # Speed control
             speed = st.slider("Animation Speed (seconds per step)", 0.1, 2.0, 0.5, 0.1, key="speed_slider")
@@ -520,6 +558,7 @@ def main():
                 st.session_state.inference_frames = []
                 st.session_state.inference_trajectory = []
                 st.session_state.inference_rewards = []
+                st.session_state.inference_terminated = False
                 st.session_state.inference_done = False
             
             if run_inference_btn:
@@ -540,6 +579,10 @@ def main():
                     frames.append(frame)
                 
                 while not done and step < max_steps:
+                    # Bounds check for policy lookup
+                    if state >= len(st.session_state.policy):
+                        st.error(f"State {state} out of bounds for policy size {len(st.session_state.policy)}. Environment mismatch.")
+                        break
                     action = int(st.session_state.policy[state])
                     next_state, reward, terminated, truncated, _ = env_infer.step(action)
                     trajectory.append(next_state)
@@ -559,6 +602,7 @@ def main():
                 st.session_state.inference_frames = frames
                 st.session_state.inference_trajectory = trajectory
                 st.session_state.inference_rewards = rewards
+                st.session_state.inference_terminated = terminated  # True if goal reached (not truncated)
                 st.session_state.inference_done = True
             
             # Display results if available
@@ -572,8 +616,10 @@ def main():
                     action_names = {0: '← Left', 1: '↓ Down', 2: '→ Right', 3: '↑ Up'}
                 elif st.session_state.env_name == "CliffWalking-v1":
                     action_names = {0: '↑ Up', 1: '→ Right', 2: '↓ Down', 3: '← Left'}
-                else:
+                elif st.session_state.env_name == "Taxi-v3":
                     action_names = {0: '↓ South', 1: '↑ North', 2: '→ East', 3: '← West', 4: 'P Pickup', 5: 'D Dropoff'}
+                else:
+                    action_names = {}
                 
                 # Show policy
                 st.markdown("### Policy Used")
@@ -595,11 +641,11 @@ def main():
                                 info_placeholder.info(f"🏁 Starting at state {trajectory[0]}")
                             elif idx <= len(rewards):
                                 s = trajectory[idx - 1]
-                                a = int(st.session_state.policy[s])
+                                a = int(st.session_state.policy[s]) if s < len(st.session_state.policy) else 0
                                 info_placeholder.info(f"State: {trajectory[idx]} | Action: {action_names.get(a, str(a))} | Reward: {rewards[idx-1]}")
                         time.sleep(speed)
                     
-                    if sum(rewards) > 0:
+                    if st.session_state.inference_terminated:
                         info_placeholder.success(f"🎉 Goal reached! Total reward: {sum(rewards)}")
                     else:
                         info_placeholder.error(f"💀 Episode ended. Total reward: {sum(rewards)}")
@@ -620,12 +666,12 @@ def main():
                         st.metric("State", trajectory[frame_idx])
                         if frame_idx <= len(rewards):
                             prev_state = trajectory[frame_idx - 1]
-                            action = int(st.session_state.policy[prev_state])
+                            action = int(st.session_state.policy[prev_state]) if prev_state < len(st.session_state.policy) else 0
                             st.metric("Action", action_names.get(action, str(action)))
                             st.metric("Reward", rewards[frame_idx - 1])
                     
                     if frame_idx == len(frames) - 1:
-                        if sum(rewards) > 0:
+                        if st.session_state.inference_terminated:
                             st.success("🎉 Goal!")
                         else:
                             st.error("💀 End")
@@ -634,14 +680,14 @@ def main():
                 st.markdown("### Trajectory Summary")
                 st.metric("Total Steps", len(trajectory) - 1)
                 st.metric("Total Reward", sum(rewards))
-                st.metric("Goal Reached", "✅ Yes" if sum(rewards) > 0 else "❌ No")
+                st.metric("Goal Reached", "✅ Yes" if st.session_state.inference_terminated else "❌ No")
                 
                 # Step-by-step table
                 with st.expander("📋 Step-by-Step Details", expanded=False):
                     steps_data = []
                     for i in range(len(trajectory) - 1):
                         s = trajectory[i]
-                        a = int(st.session_state.policy[s])
+                        a = int(st.session_state.policy[s]) if s < len(st.session_state.policy) else 0
                         ns = trajectory[i + 1]
                         r = rewards[i]
                         steps_data.append({
